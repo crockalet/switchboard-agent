@@ -40,11 +40,13 @@ enum Shell {
 
 enum Probe {
     static func isAlive(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
         if kill(pid, 0) == 0 { return true }
         return errno == EPERM
     }
 
     static func isListening(port: Int, timeout: TimeInterval = 0.12) -> Bool {
+        guard let port = UInt16(exactly: port) else { return false }
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
@@ -55,7 +57,7 @@ enum Probe {
 
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = in_port_t(UInt16(port).bigEndian)
+        addr.sin_port = in_port_t(port.bigEndian)
         addr.sin_addr.s_addr = inet_addr("127.0.0.1")
 
         let result = withUnsafePointer(to: &addr) { pointer in

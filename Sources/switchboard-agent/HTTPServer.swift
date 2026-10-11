@@ -11,6 +11,8 @@ import Foundation
 struct HTTPRequest {
     let method: String
     let path: String
+    /// Names lowercased: HTTP header names are case-insensitive.
+    let headers: [String: String]
 }
 
 struct HTTPResponse {
@@ -42,7 +44,11 @@ final class HTTPServer {
 
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = in_port_t(UInt16(port).bigEndian)
+        guard let port16 = UInt16(exactly: port), port16 > 0 else {
+            close(listener)
+            throw AgentError.misconfigured("port \(port) is not a valid port")
+        }
+        addr.sin_port = in_port_t(port16.bigEndian)
         // Loopback only. This binary starts and stops things; it has no
         // business being reachable from the network.
         addr.sin_addr.s_addr = inet_addr("127.0.0.1")
@@ -78,17 +84,31 @@ final class HTTPServer {
         let count = read(fd, &buffer, buffer.count)
         guard count > 0 else { return nil }
 
-        guard let text = String(bytes: buffer[0..<count], encoding: .utf8),
-              let line = text.split(separator: "\r\n", maxSplits: 1).first
-        else { return nil }
+        guard let text = String(bytes: buffer[0..<count], encoding: .utf8) else { return nil }
+        let head = text.components(separatedBy: "\r\n\r\n").first ?? text
+        let lines = head.components(separatedBy: "\r\n")
+        guard let line = lines.first else { return nil }
 
         let parts = line.split(separator: " ")
         guard parts.count >= 2 else { return nil }
-        return HTTPRequest(method: String(parts[0]), path: String(parts[1]))
+
+        var headers: [String: String] = [:]
+        for field in lines.dropFirst() {
+            guard let colon = field.firstIndex(of: ":") else { continue }
+            let name = field[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            headers[name] = field[field.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        return HTTPRequest(method: String(parts[0]), path: String(parts[1]), headers: headers)
     }
 
     private static func write(_ response: HTTPResponse, to fd: Int32) {
-        let reason = response.status == 200 ? "OK" : (response.status == 404 ? "Not Found" : "Bad Request")
+        let reason: String
+        switch response.status {
+        case 200: reason = "OK"
+        case 401: reason = "Unauthorized"
+        case 404: reason = "Not Found"
+        default: reason = "Bad Request"
+        }
         var head = "HTTP/1.1 \(response.status) \(reason)\r\n"
         head += "Content-Type: application/json\r\n"
         head += "Content-Length: \(response.body.count)\r\n"

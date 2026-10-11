@@ -75,7 +75,11 @@ To keep it running, make it a launchd agent of its own.
 
 ## API
 
-All on `127.0.0.1` only.
+All on `127.0.0.1` only. Every endpoint but `/v1/health` needs the
+`X-Switchboard-Token` header, whose value `serve` writes to
+`~/.config/switchboard/token` (mode 0600) the first time it runs. Without it the
+agent answers `401`, so no other local process or web page can drive it, and the
+custom header means a browser's preflight fails before a request is sent.
 
 | | |
 | --- | --- |
@@ -84,6 +88,7 @@ All on `127.0.0.1` only.
 | `POST /v1/services/<id>/start` | |
 | `POST /v1/services/<id>/stop` | |
 | `POST /v1/services/<id>/restart` | |
+| `GET /v1/services/<id>/logs?lines=200` | the tail of the service's log, and its path |
 
 A refused action answers `400` with `{"ok": false, "message": "..."}`.
 
