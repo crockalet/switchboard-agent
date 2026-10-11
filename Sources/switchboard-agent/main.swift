@@ -66,6 +66,14 @@ func payload(for state: ServiceState) -> [String: Any] {
 
 switch command {
 case "serve":
+    let token: String
+    do {
+        token = try AgentToken.loadOrCreate()
+    } catch {
+        FileHandle.standardError.write(Data("\(error)\n".utf8))
+        exit(1)
+    }
+
     let server = HTTPServer(port: config.port) { request in
         // Split the query off before the path segments, or the last segment
         // comes through as "logs?lines=50".
@@ -77,6 +85,13 @@ case "serve":
                 if kv.count == 2 { result[String(kv[0])] = String(kv[1]) }
             }
             : [:]
+
+        // Everything but the health probe needs the token: without it any
+        // local process or web page could restart services or read logs.
+        if segments != ["v1", "health"],
+           !AgentToken.matches(request.headers["x-switchboard-token"], token) {
+            return .json(["ok": false, "message": "Missing or wrong token."], status: 401)
+        }
 
         switch (request.method, segments) {
         case ("GET", ["v1", "health"]):

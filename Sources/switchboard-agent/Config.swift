@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import Security
 
 /// How the agent starts and stops one service.
 enum ServiceKind: String, Codable {
@@ -79,5 +80,53 @@ struct AgentConfig: Codable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(self).write(to: url)
+    }
+}
+
+/// The shared secret the droplet sends as `X-Switchboard-Token`. A file of its
+/// own, so the agent never rewrites the user's services.json; always at the
+/// default location, because that is where the droplet looks.
+enum AgentToken {
+    static var url: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/switchboard/token")
+    }
+
+    /// The existing token, or a new one written at 0600.
+    static func loadOrCreate() throws -> String {
+        if let text = try? String(contentsOf: url, encoding: .utf8) {
+            let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !token.isEmpty { return token }
+        }
+
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw AgentError.misconfigured("could not generate a token")
+        }
+        let token = bytes.map { String(format: "%02x", $0) }.joined()
+
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? FileManager.default.removeItem(at: url)
+        guard FileManager.default.createFile(
+            atPath: url.path,
+            contents: Data((token + "\n").utf8),
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw AgentError.misconfigured("could not write \(url.path)")
+        }
+        return token
+    }
+
+    /// Constant time, so the comparison does not leak a matching prefix.
+    static func matches(_ candidate: String?, _ token: String) -> Bool {
+        guard let candidate else { return false }
+        let a = Array(candidate.utf8), b = Array(token.utf8)
+        guard a.count == b.count else { return false }
+        return zip(a, b).reduce(0) { $0 | ($1.0 ^ $1.1) } == 0
     }
 }
